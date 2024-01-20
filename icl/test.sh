@@ -6,7 +6,7 @@ conda activate openflamingo
 export TASK_NAME=relations
 export MODEL=idefics
 
-export OUTPUT_FILE=/media/mustafa/MyBook/In-Context-Learning/results/$TASK_NAME.json
+export OUTPUT_FILE=/media/mustafa/MyBook/In-Context-Learning/results/${TASK_NAME}_${MODEL}.json
 export ANNO_FILE=/media/mustafa/MyBook/In-Context-Learning/dataset/annotations/$TASK_NAME.json
 
 export IMAGE_DIR=/media/mustafa/MyBook/In-Context-Learning/dataset/imgs/all/
@@ -19,4 +19,4 @@ python test.py --model $MODEL --annotation_file $ANNO_FILE --support_example_cou
 
 conda deactivate
 conda activate vl-bench
-python ./bin/eval.py /media/mustafa/MyBook/In-Context-Learning/results/${TASK_NAME}_${MODEL}.json --mode generated_text
+python ./bin/eval.py $OUTPUT_FILE --mode generated_text

@@ -147,17 +147,17 @@ class Idefics:
                                      'raw_result': generated_text_info['raw_result'],
                                      'salt_result': generated_text_info['salt_result']}
 
-    def prepare_results(self, task_name):
+    def prepare_results(self, file_name):
         """
         Prepare and write the results to a JSON file.
 
         Parameters:
-        - task_name (str): Name of the task.
+        - file_name (str): Name of the output file.
 
         Returns:
         None
         """
-        write_results(task_name[:-5] + "_idefics.json", self.results)
+        write_results(file_name, self.results)
 
 
 idefics_instance = Idefics()
