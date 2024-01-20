@@ -1,6 +1,7 @@
 import argparse
 from models.models import model_registry
 from utils.dataset import Dataset_v1
+from utils.eval import process_scores
 
 def main():
     parser = argparse.ArgumentParser(description="Test script for various models")
@@ -21,6 +22,7 @@ def main():
         model_load_func(args.device)
         model_test_func(data, args.scoring_type)
         model_write_res_func(args.output_file)
+        process_scores(args.output_file, args.scoring_type)
     else:
         print(f"Model '{args.model}' is not registered.")
 
