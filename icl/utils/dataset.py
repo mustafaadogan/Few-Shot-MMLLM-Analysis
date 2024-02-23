@@ -1,12 +1,12 @@
 import os.path as osp
 import json
-import random
 from copy import deepcopy
 from torch.utils.data import Dataset
 from torchvision.io import read_image
 from PIL import Image
 from .util import process_path
-from utils.custom_prompt import Prompt
+from .custom_prompt import Prompt
+from .util import get_random_sample
 
 
 class BaseDataset(Dataset):
@@ -54,7 +54,6 @@ class BaseDataset(Dataset):
         """
         # Generate dataset based on the specified mode
         data_list = []
-        random.seed(42)
 
         for item_id in self.ids:
             item = self.json_data[item_id]
@@ -64,8 +63,8 @@ class BaseDataset(Dataset):
             if len(support_classes_examples) < self.num_support or len(support_classes_foil_examples) < self.num_support:
                 continue
 
-            support_classes_examples = random.sample(support_classes_examples, self.num_support)
-            support_classes_foil_examples = random.sample(support_classes_foil_examples, self.num_support)
+            support_classes_examples = get_random_sample(support_classes_examples, self.num_support)
+            support_classes_foil_examples = get_random_sample(support_classes_foil_examples, self.num_support)
 
             data_item = {
                 'support_classes_examples': support_classes_examples,
@@ -134,7 +133,7 @@ class Dataset_v1(Dataset):
             num_support,
             img_dir=None,
             mode='CLASS',
-            prompt_type='GPT-4V(ision) w/o Tie',
+            prompt_type='GPT4VisionwoTie',
             tokenizer=None,
             **kwargs,
     ):
