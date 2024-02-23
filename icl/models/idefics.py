@@ -1,10 +1,12 @@
 from .models import model_registry
 from tqdm import tqdm
 from utils.util import write_results
+from utils.util import get_random_number
+import torch.nn.functional as F
+from utils.util import check_answer
 
 import torch
 from transformers import IdeficsForVisionText2Text, AutoProcessor
-import random
 
 
 def calculate_score(generated_text, caption_order):
@@ -34,13 +36,70 @@ def calculate_score(generated_text, caption_order):
 
     return result
 
+def prepare_prompt(user_prompt, support_data, query_data):
+    """
+    Prepare prompts using user prompt, support example  data, and query example data.
+
+    Parameters:
+    - user_prompt (str): User prompt for the assistant.
+    - support_data (list): List of dictionaries containing support data.
+    - query_data (dict): Dictionary containing query data.
+
+    Returns:
+    tuple: Tuple containing prompt, and query caption order.
+    """
+    
+    prompt = []
+    for item in support_data:
+        img, caption, foil = item['image'], item['caption'], item['foil']
+        caption_order = get_random_number(0, 1)
+        
+        if caption_order == 1:
+            caption, foil = foil, caption
+
+        prompt += [
+            "User:",
+            img,
+            f"{user_prompt} caption 0: {caption} caption 1: {foil}. \nAssistant:Final Answer: caption {caption_order}\n"
+        ]
+
+    query_img, query_caption_text, query_foil_text = query_data['image'], query_data['caption'], query_data['foil']
+    query_caption_order = get_random_number(0, 1)
+    
+    if query_caption_order == 1:
+        query_caption_text, query_foil_text = query_foil_text, query_caption_text
+
+    prompt += [
+        "User:",
+        query_img,
+        f"{user_prompt} caption 0: {query_caption_text} caption 1: {query_foil_text}. \nAssistant:"
+    ]
+
+    return prompt, query_caption_order
+
+def prepare_answer(raw_generated_text, query_prompt):
+    """
+    Prepare answer using raw generated text and query prompt. 
+
+    Parameters:
+    - raw_generated_text (str): Generated text by Idefics.
+    - query_prompt (str): Query to find the salt answer.
+
+    Returns:
+    salt_result (str): Actual answer of Idefics.
+    """
+
+    salt_result_index = raw_generated_text.find(query_prompt) + len(query_prompt)
+    salt_result = raw_generated_text[salt_result_index:]
+
+    return salt_result
+
 
 class Idefics:
     def __init__(self):
         self.model = None
         self.processor = None
         self.results = {}
-        random.seed(42)
 
     def load_model(self, device):
         """
@@ -52,68 +111,62 @@ class Idefics:
         Returns:
         None
         """
+        print('Loading Idefics!!!')
         checkpoint_path = "HuggingFaceM4/idefics-9b-instruct"
         self.device = device
-        self.model = IdeficsForVisionText2Text.from_pretrained(checkpoint_path, torch_dtype=torch.bfloat16).to(device)
+        self.model = IdeficsForVisionText2Text.from_pretrained(checkpoint_path, torch_dtype=torch.float16).to(device)
         self.processor = AutoProcessor.from_pretrained(checkpoint_path)
+        self.model.eval()
+        print('Idefics loaded!!!')
 
-    def generate_text(self, user_prompt, support_data, query_data):
+    def generate_text(self, prompt):
         """
         Generate text based on the given prompts, support data, and query data.
 
         Parameters:
-        - user_prompt (str): User prompt for the assistant.
-        - support_data (list): List of dictionaries containing support data.
-        - query_data (dict): Dictionary containing query data.
+        - prompt (str): Prompt for the assistant.
 
         Returns:
-        dict: Dictionary containing generated text data.
+        raw_generated_text (str): Generated text data.
         """
-        prompt = []
-        for item in support_data:
-            img, caption, foil = item['image'], item['caption'], item['foil']
-            caption_order = random.randint(0, 1)
-            
-            if caption_order == 1:
-                caption, foil = foil, caption
-
-            prompt += [
-                "User:",
-                img,
-                f"{user_prompt} caption 0: {caption} caption 1: {foil}. \nAssistant:Final Answer: caption {caption_order}\n"
-            ]
-
-        query_img, query_caption_text, query_foil_text = query_data['image'], query_data['caption'], query_data['foil']
-        query_caption_order = random.randint(0, 1)
-        
-        if query_caption_order == 1:
-            query_caption_text, query_foil_text = query_foil_text, query_caption_text
-
-        prompt += [
-            "User:",
-            query_img,
-            f"{user_prompt} caption 0: {query_caption_text} caption 1: {query_foil_text}. \nAssistant:"
-        ]
-        
-        query_prompt = prompt[-1]
-
         # --batched mode
         inputs = self.processor(prompt, return_tensors="pt").to(self.device)
         bad_words_ids = self.processor.tokenizer(["<image>", "<fake_token_around_image>"], add_special_tokens=False).input_ids
 
         generated_ids = self.model.generate(**inputs, max_new_tokens=30, bad_words_ids=bad_words_ids)
-        raw_result = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        print(f"raw_result = {raw_result}")
+        raw_generated_text = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        print(f"raw_generated_text = {raw_generated_text}")
         
-        salt_result_index = raw_result.find(query_prompt) + len(query_prompt)
-        salt_result = raw_result[salt_result_index:]
-        
-        result = {'raw_result': raw_result,
-                  'salt_result': salt_result,
-                  'query_caption_order': query_caption_order,
-                  'prompt': str(prompt)}
+        return raw_generated_text
 
-        return result
+    def calculate_perplexity(self, prompt):
+        """
+        Generate text based on the given prompts, support data, and query data.
+
+        Parameters:
+        - prompt (str): Prompt for the assistant.
+
+        Returns:
+        score (float): Perplexity score.
+        """
+        # --batched mode
+        inputs = self.processor(prompt, return_tensors="pt").to(self.device)
+
+        with torch.no_grad():
+            model_output = self.model(**inputs)
+        
+        logits = model_output.logits.to(self.device)
+
+        logits = model_output.logits[0]
+        true_labels = inputs["input_ids"].to(self.device)  # Flatten the true labels
+        
+        # Calculate cross-entropy loss
+        loss = F.cross_entropy(logits, true_labels)
+        
+        # Calculate perplexity
+        perplexity = torch.exp(loss)
+
+        return float(perplexity)
 
     def test(self, data, scoring_type):
         """
@@ -137,27 +190,52 @@ class Idefics:
                           'caption': item['query_raw_texts'][0],
                           'foil': item['query_raw_texts'][1]}
 
-            generated_text_info = self.generate_text(item['prompt'], support_data, query_data)
-            score = calculate_score(generated_text_info['salt_result'], generated_text_info['query_caption_order'])
+            model_prompt, query_caption_order = prepare_prompt(item['prompt'], support_data, query_data)
 
-            item_id = item['item_id']
-            self.results[item_id] = {'scores': score,
-                                     'query_caption_order': generated_text_info['query_caption_order'],
-                                     'prompt': generated_text_info['prompt'],
-                                     'raw_result': generated_text_info['raw_result'],
-                                     'salt_result': generated_text_info['salt_result']}
+            if scoring_type == "perplexity":
+                caption_0_prompt = model_prompt[-1] + "Final Answer: caption 0"
+                caption_1_prompt = model_prompt[-1] + "Final Answer: caption 1"
 
-    def prepare_results(self, task_name):
+                model_prompt[-1] = caption_0_prompt
+                caption_score = self.calculate_perplexity(model_prompt)
+
+                model_prompt[-1] = caption_1_prompt
+                foil_score = self.calculate_perplexity(model_prompt)
+
+                if query_caption_order == 1:
+                    caption_score, foil_score = foil_score, caption_score 
+                
+                item_id = item['item_id']
+                self.results[item_id] = {'scores': [caption_score, foil_score]
+                                        }
+            
+            elif scoring_type == "generated_text":
+                model_generated_text = self.generate_text(model_prompt)
+                model_salt_generated_text = prepare_answer(model_generated_text, model_prompt[-1])
+
+                score = check_answer(model_salt_generated_text, query_caption_order) 
+
+                item_id = item['item_id']
+                self.results[item_id] = {'scores': score,
+                                        'query_caption_order': query_caption_order,
+                                        'prompt': model_prompt,
+                                        'raw_result': model_generated_text,
+                                        'salt_result': model_salt_generated_text
+                                        }
+            else:
+                raise NotImplementedError(f'{scoring_type} not implemented yet!')    
+
+    def prepare_results(self, file_name):
         """
         Prepare and write the results to a JSON file.
 
         Parameters:
-        - task_name (str): Name of the task.
+        - file_name (str): Name of the output file.
 
         Returns:
         None
         """
-        write_results(task_name[:-5] + "_idefics.json", self.results)
+        write_results(file_name, self.results)
 
 
 idefics_instance = Idefics()
