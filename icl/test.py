@@ -4,6 +4,7 @@ from utils.dataset import Dataset_v1
 from utils.eval import process_scores
 from utils.util import set_seed
 
+
 def main():
     parser = argparse.ArgumentParser(description="Test script for various models")
     parser.add_argument("--model", choices=list(model_registry.models.keys()), help="Model to test")
@@ -28,7 +29,7 @@ def main():
         model_write_res_func(args.output_file)
         scores = process_scores(args.output_file, args.scoring_type)
         print(scores)
-        
+
     else:
         print(f"Model '{args.model}' is not registered.")
 

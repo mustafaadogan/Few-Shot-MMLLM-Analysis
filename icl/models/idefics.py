@@ -199,6 +199,7 @@ class Idefics:
                 model_prompt[-1] = caption_0_prompt
                 caption_score = self.calculate_perplexity(model_prompt)
 
+
                 model_prompt[-1] = caption_1_prompt
                 foil_score = self.calculate_perplexity(model_prompt)
 
@@ -224,6 +225,7 @@ class Idefics:
                                         }
             else:
                 raise NotImplementedError(f'{scoring_type} not implemented yet!')    
+
 
     def prepare_results(self, file_name):
         """
