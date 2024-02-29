@@ -60,7 +60,7 @@ class BaseDataset(Dataset):
             support_classes_examples = self._get_support_examples(item_id, mode)
             support_classes_foil_examples = self._get_support_examples(item_id, mode, is_foil=True)
 
-            if len(support_classes_examples) < self.num_support or len(support_classes_foil_examples) < self.num_support:
+            if len(support_classes_examples) < self.num_support or len(support_classes_foil_examples) < self.num_support or item['mturk']['caption'] <= 1:
                 continue
 
             support_classes_examples = get_random_sample(support_classes_examples, self.num_support)
