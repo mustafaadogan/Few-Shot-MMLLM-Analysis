@@ -124,10 +124,10 @@ class OpenFlamingo:
         true_labels = lang_x["input_ids"].view(-1).to(self.device)  # Flatten the true labels
         
         # Calculate cross-entropy loss
-        loss = F.cross_entropy(logits, true_labels)
+        loss = self.crit(logits, true_labels)
         
         # Calculate perplexity
-        perplexity = torch.exp(loss)
+        perplexity = loss.mean().exp()
 
         return float(perplexity)
 
