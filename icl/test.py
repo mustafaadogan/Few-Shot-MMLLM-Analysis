@@ -33,5 +33,6 @@ def main():
     else:
         print(f"Model '{args.model}' is not registered.")
 
+
 if __name__ == "__main__":
     main()

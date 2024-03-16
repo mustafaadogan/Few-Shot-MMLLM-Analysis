@@ -16,7 +16,7 @@ class OpenFlamingo:
         self.model = None
         self.image_processor = None
         self.tokenizer = None
-        self.results= {}
+        self.results = {}
         self.device = None
         
 

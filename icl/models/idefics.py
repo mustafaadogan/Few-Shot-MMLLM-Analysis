@@ -226,7 +226,6 @@ class Idefics:
             else:
                 raise NotImplementedError(f'{scoring_type} not implemented yet!')    
 
-
     def prepare_results(self, file_name):
         """
         Prepare and write the results to a JSON file.
