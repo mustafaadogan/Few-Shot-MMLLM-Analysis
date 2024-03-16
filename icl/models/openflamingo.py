@@ -2,9 +2,9 @@ from open_flamingo import create_model_and_transforms
 from huggingface_hub import hf_hub_download
 from .models import model_registry
 from tqdm import tqdm
-from ..utils.util import write_results
-from ..utils.util import get_random_number
-from ..utils.util import check_answer
+from .utils.util import write_results
+from .utils.util import get_random_number
+from .utils.util import check_answer
 import torch.nn.functional as F
 
 import torch
