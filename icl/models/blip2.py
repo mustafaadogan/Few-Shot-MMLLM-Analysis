@@ -1,6 +1,8 @@
 from tqdm import tqdm
 from transformers import AutoProcessor, Blip2ForConditionalGeneration
 import torch
+
+from .models import model_registry
 from ..utils.util import write_results
 from ..utils.util import get_random_number
 from ..utils.util import check_answer
@@ -123,3 +125,7 @@ class Blip:
         perplexity = torch.exp(loss)
 
         return float(perplexity)
+
+
+blip2_instance = Blip()
+model_registry.register_model("blip2", (blip2_instance.load_model, blip2_instance.test, blip2_instance.prepare_results))
