@@ -1,4 +1,4 @@
-name: icl
+name: icl2
 channels:
   - pytorch
   - nvidia

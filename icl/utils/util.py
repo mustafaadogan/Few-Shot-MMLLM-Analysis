@@ -1,11 +1,39 @@
 import os.path as osp
+import os
 import torch
 import json
 import random
+from itertools import permutations
+import hashlib
 
-random.seed(43)
+SEED_NUMBER = 42
+random.seed(SEED_NUMBER)
+
+def get_random_index_list(sample_list, count):
+   return get_random_sample(list(permutations(sample_list)), count)
+
+def hash_list(lst):
+    # Convert the list to a string
+    list_str = str(lst)
+    # Hash the string representation of the list
+    hashed = hashlib.sha256(list_str.encode()).hexdigest()
+    # Convert the hash value to an integer
+    hash_int = int(hashed, 16)
+    return hash_int
+
+def hash_dict(d):
+    # Convert the dictionary to a JSON string
+    json_str = json.dumps(d, sort_keys=True)
+    # Hash the JSON string
+    hashed = hashlib.sha256(json_str.encode()).hexdigest()
+    # Convert the hash value to an integer
+    hash_int = int(hashed, 16)
+    return hash_int
 
 def process_path(path):
+    if path == None:
+        return ""
+
     path = osp.expanduser(path)
     path = osp.abspath(path)
     return path
@@ -15,36 +43,34 @@ def get_device():
     return torch.device(device)
 
 def write_results(file_name, results):
-    with open(process_path(file_name), 'w') as f:
+    file_path = process_path(file_name)
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    
+    with open(file_path, 'w') as f:
         json.dump(results, f, indent=4)
 
-def get_random_number(start, stop):
+def get_random_number(start, stop, seed):
+    random.seed(seed)
     return random.randint(start, stop)
 
 def get_random_sample(sample_list, count):
+    random.seed(hash_list(sample_list))
     return random.sample(sample_list, count)
 
 def set_seed(seed):
+    global SEED_NUMBER
     print(f"Setting seed to {seed}!")
-    random.seed(seed)
+    SEED_NUMBER = seed
+    random.seed(SEED_NUMBER)
 
 def check_answer(answer, caption_order):
-    caption_list = ["caption 0", "Caption 0", "Final Answer: caption 0", "Final Answer: Caption 0"]
-    foil_list = ["caption 1", "Caption 1", "Final Answer: caption 1", "Final Answer: Caption 1"]
-    generic_check = ["caption 0/caption 1", "Caption 0/Caption 1", "caption 1/caption 0", "Caption 1/Caption 0"]
-    if caption_order == 1:
-        caption_list, foil_list = foil_list, caption_list
-
-    caption_check = any(substring in answer for substring in caption_list)
-    foil_check = any(substring in answer for substring in foil_list)
-    generic_check = all(substring not in answer for substring in generic_check)
-
-    if generic_check:
-        if caption_check and not foil_check:
-            return [1, 0]
-        elif not caption_check and foil_check:
-            return [0, 1]
-        else:
-            return [-1, -1]
+    if caption_order == True:
+      if 'yes' in answer or 'Yes' in answer or 'true' in answer or 'True' in answer:
+        return [1, 0]
+      else:
+        return [0, 1]
     else:
-        return [-1, -1]
+      if 'no' in answer or 'No' in answer or 'false' in answer or 'False' in answer:
+        return [1, 0]
+      else:
+        return [0, 1]

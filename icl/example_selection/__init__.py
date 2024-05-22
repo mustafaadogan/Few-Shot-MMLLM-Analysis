@@ -1,0 +1,1 @@
+from .clip_similarity import ClipModel

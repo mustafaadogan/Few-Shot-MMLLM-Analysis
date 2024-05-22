@@ -2,13 +2,9 @@ from open_flamingo import create_model_and_transforms
 from huggingface_hub import hf_hub_download
 from .models import model_registry
 from tqdm import tqdm
-from utils.util import write_results
-from utils.util import get_random_number
-from utils.util import check_answer
-import torch.nn.functional as F
+from utils.util import write_results, check_answer, get_random_index_list
 
 import torch
-import torch.nn as nn
 
 
 class OpenFlamingo:
@@ -18,40 +14,60 @@ class OpenFlamingo:
         self.tokenizer = None
         self.results= {}
         self.device = None
+        self.sc_exp_cnt = 1
         
 
-    def load_model(self, device) -> None:
+    def load_model(self, args) -> None:
         """
-        Load OpenFlamingo model.
+        Load the OpenFlamingo model and processor.
 
         Parameters:
-        - device (Any): The device on which to load the model.
+        - args: The args to load the model.
 
         Returns:
         None
         """
         
         print('Loading OpenFlamingo!!!')
-        self.device = device
+        self.device = args.device
+        self.scoring_type = args.scoring_type
+        self.output_file = args.output_file
+        self.sc_exp_cnt = args.sc_exp_cnt
         self.model, self.image_processor, self.tokenizer = create_model_and_transforms(
             clip_vision_encoder_path="ViT-L-14",
             clip_vision_encoder_pretrained="openai",
-            lang_encoder_path="anas-awadalla/mpt-7b",
-            tokenizer_path="anas-awadalla/mpt-7b",
-            cross_attn_every_n_layers=4 
+            lang_encoder_path=args.lang_encoder_path, 
+            tokenizer_path=args.tokenizer_path,
+            cross_attn_every_n_layers=args.cross_attn_every_n_layers#2
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             
         self.model.to(self.device)
-        self.crit = nn.CrossEntropyLoss(
-            reduction='none',
-            ignore_index=self.tokenizer.pad_token_id,
-        )
+
         self.tokenizer.padding_side = "left"
-        checkpoint_path = hf_hub_download("openflamingo/OpenFlamingo-9B-vitl-mpt7b", "checkpoint.pt")
+        checkpoint_path = hf_hub_download(args.hf_path, "checkpoint.pt")
         self.model.load_state_dict(torch.load(checkpoint_path), strict=False)
         self.model.eval()
+        
+        self.tokenizer.add_special_tokens(
+            {"additional_special_tokens": ["<|endofchunk|>", "<image>"]}
+        )
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.add_special_tokens({"pad_token": "<PAD>"})
+        
+        self.generation_cfg = {
+            'num_beams': 3,
+            'length_penalty': -2.0,
+        }
+
+        self.is_cot_active = args.is_cot_active
+        
+        if self.is_cot_active:
+          self.generation_cfg['max_new_tokens'] = 512
+        else:
+          self.generation_cfg['max_new_tokens'] = 5
+
         print('OpenFlamingo loaded!!!')
 
     def calculate_generated_text(self, prompt, vision_x):
@@ -63,7 +79,7 @@ class OpenFlamingo:
         - vision_x (torch.Tensor): Tensor containing vision data.
 
         Returns:
-        Tuple[str, str]: Tuple containing the result and generated text.
+        Tuple[str, str]: Tuple containing the raw and salt answer text.
         """
         
         if self.model is None:
@@ -75,7 +91,6 @@ class OpenFlamingo:
             padding='longest',
             truncation=True,
             max_length=2000,
-            add_special_tokens=False,
         )
 
         with torch.no_grad():
@@ -83,138 +98,107 @@ class OpenFlamingo:
                 vision_x=vision_x.to(self.device),
                 lang_x=lang_x["input_ids"].to(self.device),
                 attention_mask=lang_x["attention_mask"].to(self.device),
-                max_new_tokens=30,
-                num_beams=1,
-                do_sample=True,
-                pad_token_id=self.tokenizer.pad_token_id
+                pad_token_id=self.tokenizer.pad_token_id,
+                **self.generation_cfg,
             )
 
-        text = self.tokenizer.decode(generated_text[0], skip_special_tokens=True)
 
-        return text
+        raw_answer = self.tokenizer.decode(generated_text[0], skip_special_tokens=False)
+        salt_answer  = raw_answer[len(prompt):].split("<|endofchunk|>")[0]
 
-    def calculate_perplexity(self, prompt, vision_x):
-        """
-        Calculate the perplexity score given a prompt and vision data.
+        return raw_answer, salt_answer.strip()
 
-        Parameters:
-        - prompt (str): The input prompt.
-        - vision_x (torch.Tensor): Tensor containing vision data.
 
-        Returns:
-        float: Model score.
-        """
-        
-        if self.model is None:
-            raise AttributeError('Model is not initialized. Call load_model first!')
-
-        lang_x = self.tokenizer(
-            [prompt],
-            return_tensors="pt",
-        )
-
-        with torch.no_grad():
-            model_output = self.model(
-                vision_x=vision_x.to(self.device),
-                lang_x=lang_x["input_ids"].to(self.device),
-                attention_mask=lang_x["attention_mask"].to(self.device)
-            )
-
-        logits = model_output.logits[0].to(self.device)
-        true_labels = lang_x["input_ids"].view(-1).to(self.device)  # Flatten the true labels
-        
-        # Calculate cross-entropy loss
-        loss = self.crit(logits, true_labels)
-        
-        # Calculate perplexity
-        perplexity = loss.mean().exp()
-
-        return float(perplexity)
-
-    def test(self, data, scoring_type):
+    def test(self, data):
         """
         Test the model on the given data using the specified scoring type.
 
         Parameters:
         - data (List[Dict]): List of input data dictionaries.
-        - scoring_type (str): Type of scoring to perform.
 
         Returns:
         None
         """
         
         for item in tqdm(data):
-            vision_x = [self.image_processor(x).unsqueeze(0) for x in item['support_classes_image_list']]
-            vision_x += [self.image_processor(item['query_image']).unsqueeze(0)]
-            vision_x = torch.cat(vision_x, dim=0).unsqueeze(1).unsqueeze(0)
+            assert len(item['support_classes_image_list']) == len(item['support_classes_raw_texts']), "Image-Caption count mismatch!"
+            sc_results = {}
+            sc_results['raw_results'] = []
+            sc_results['score_list'] = []
+            initial_index_list = list(range(len(item['support_classes_image_list'])))
+            index_list = get_random_index_list(initial_index_list, self.sc_exp_cnt)
 
-            prompt = ''
-            for raw_texts in item['support_classes_raw_texts']:
-                support_caption, support_foil = raw_texts[0], raw_texts[1]
-                support_example_caption_order = get_random_number(0, 1)
+            for indexes in index_list:
+                support_class_image_list = [item['support_classes_image_list'][i] for i in indexes]
+                support_class_text_list = [item['support_classes_raw_texts'][i] for i in indexes]
+                cot_info_list = [item['cot_info'][i] for i in indexes]
+                vision_x = [self.image_processor(x).unsqueeze(0) for x in support_class_image_list]
+                vision_x += [self.image_processor(item['query_image']).unsqueeze(0)]
+                vision_x = torch.cat(vision_x, dim=0).unsqueeze(1).unsqueeze(0)
 
-                if support_example_caption_order == 1:
-                    prompt += f'<image>{item["prompt"]} caption 0: {support_foil} caption 1: {support_caption} '
+                prompt = ''
+                for raw_texts, cot_info in zip(support_class_text_list, cot_info_list):
+                    support_caption, support_foil = raw_texts[0], raw_texts[1]
+                    cot_caption, cot_foil, is_caption_example = cot_info[0], cot_info[1], cot_info[2]
+
+                    if is_caption_example:
+                        prompt += f"<image>{item['prompt']} {support_caption} {cot_caption}<|endofchunk|>"
+                    else:
+                        prompt += f"<image>{item['prompt']} {support_foil} {cot_foil}<|endofchunk|>"
+
+
+                query_caption, query_foil, is_caption_query = item['query_raw_texts'][0], item['query_raw_texts'][1], item['query_raw_texts'][2]
+
+                if is_caption_query:
+                    prompt += f"<image>{item['prompt']} {query_caption} Answer:"
                 else:
-                    prompt += f'<image>{item["prompt"]} caption 0: {support_caption} caption 1: {support_foil} '
+                    prompt += f"<image>{item['prompt']} {query_foil} Answer:"
 
-                if scoring_type == 'generated_text':
-                    prompt += f'Final Answer: caption {support_example_caption_order}<|endofchunk|>'
-                elif scoring_type == 'perplexity':
-                    prompt += f'Correct caption: {support_caption}<|endofchunk|>'
+                item_result = {}
+                score = [0, 1]
+
+                if self.scoring_type == 'generated_text':
+                    raw_answer, salt_answer = self.calculate_generated_text(prompt, vision_x)
+                    
+                    score = check_answer(salt_answer, is_caption_query) 
+
+                    item_result = {'scores': score,
+                                'caption_order': is_caption_query,
+                                'generated_text': raw_answer,
+                                'salt_answer': salt_answer}
+                                
                 else:
-                    raise NotImplementedError(f'{scoring_type} not implemented yet!')
+                    raise NotImplementedError(f'{self.scoring_type} not implemented yet!')
 
-            query_caption, query_foil = item['query_raw_texts'][0], item['query_raw_texts'][1]
-            query_caption_order = get_random_number(0, 1)
-
-            if query_caption_order == 1:
-                prompt += f'<image>{item["prompt"]}caption 0: {query_foil} caption 1: {query_caption} '
-            else:
-                prompt += f'<image>{item["prompt"]}caption 0: {query_caption} caption 1: {query_foil} '
-
-            
-
-            item_result = {}
-
-            if scoring_type == 'generated_text':
-                prompt += 'Final Answer: '
-                generated_text = self.calculate_generated_text(prompt, vision_x)
                 
-                score = check_answer(generated_text, query_caption_order) 
+                sc_results['raw_results'].append(item_result)
+                sc_results['score_list'].append(score)
 
-                item_result = {'scores': score,
-                               'caption_order': query_caption_order,
-                               'generated_text': generated_text}
+                if sc_results['score_list'].count([1, 0]) >= (self.sc_exp_cnt/2) or sc_results['score_list'].count([0, 1]) >= (self.sc_exp_cnt/2):
+                    break
 
-            elif scoring_type == 'perplexity':
-                caption_prompt = prompt + f'Correct caption: {query_caption} '
-                foil_prompt = prompt + f'Correct caption: {query_foil} '
+            
 
-                caption_score = self.calculate_perplexity(caption_prompt, vision_x)
-                foil_score = self.calculate_perplexity(foil_prompt, vision_x)
-
-                item_result = {'scores': [caption_score, foil_score]}
-
+            if sc_results['score_list'].count([1, 0]) >= (self.sc_exp_cnt/2):
+                final_result = [1, 0] 
             else:
-                raise NotImplementedError(f'{scoring_type} not implemented yet!')
-
+                final_result = [0, 1]
+                
+            sc_results['scores'] = final_result
             item_id = item['item_id']
-            self.results[item_id] = item_result
-            
-            
+            self.results[item_id] = sc_results
     
-    def prepare_results(self, file_name):
+    def prepare_results(self):
         """
         Prepare and write the results to a JSON file.
 
         Parameters:
-        - file_name (str): Name of the output file.
+        - None
 
         Returns:
         None
         """
-        write_results(file_name, self.results)
+        write_results(self.output_file, self.results)
 
 openflamingo_instance = OpenFlamingo()
 model_registry.register_model("openflamingo", (openflamingo_instance.load_model, openflamingo_instance.test, openflamingo_instance.prepare_results))

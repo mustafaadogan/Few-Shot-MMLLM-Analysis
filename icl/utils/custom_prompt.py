@@ -16,6 +16,12 @@ class Prompt:
             
         elif prompt_type == 'none':
             self.prompt = """"""
+        
+        elif prompt_type == 'ITM':
+            self.prompt = """Does the following sentence describe the image?:"""
+        
+        elif prompt_type == 'CoT_ITM':
+            self.prompt == """Based on the content of the image, determine if the sentence is true or false. Provide your reasoning step by step, and then output your answer in the format: Final Answer: Yes (if the sentence is true for the image) / No (if the sentence is false for the image)."""
 
         else:
             raise NotImplementedError(f'{prompt_type} not implemented yet!')
