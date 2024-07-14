@@ -21,7 +21,7 @@ class BaseDataset(Dataset):
     """
     Only loads the JSON annotations, and creates support set.
     """
-    def __init__(self, json_path, num_support, mode, similarity_data_path, top_k, top_n, is_cot_active, cot_desc_data_path):
+    def __init__(self, json_path, num_support, mode, similarity_data_path, top_k, top_n, is_few_cot_active, cot_desc_data_path):
         """
         Initialize the BaseDataset with the specified JSON file path, number of support examples, and mode.
 
@@ -32,14 +32,14 @@ class BaseDataset(Dataset):
         - similarity_data_path (str): Path to JSON file containing similarity scores of image and texts.
         - top_k (int): Number of visual similar examples.
         - top_n (int): Number of textual similar examples.
-        - is_cot_active (bool): CoT analysis active or not.
+        - is_few_cot_active (bool): CoT analysis active or not.
         - cot_desc_data_path (str): Path to JSON file containing CoT description of image-text pairs.
         
         Returns:
         None
         """
         # Initialize BaseDataset
-        self.is_cot_active = is_cot_active
+        self.is_few_cot_active = is_few_cot_active
         json_path = process_path(json_path)
         assert osp.isfile(json_path), 'Needs a valid annotation file path'
         with open(json_path, 'r') as f:
@@ -57,8 +57,8 @@ class BaseDataset(Dataset):
                 self.similarity_data = json.load(f)
 
         cot_desc_data_path = process_path(cot_desc_data_path)
-        assert is_cot_active == False or osp.isfile(cot_desc_data_path),'In CoT active mode, needs a valid CoT description file path'
-        if is_cot_active:
+        assert is_few_cot_active == False or osp.isfile(cot_desc_data_path),'In CoT active mode, needs a valid CoT description file path'
+        if is_few_cot_active:
             with open(cot_desc_data_path, 'r') as f:
                 self.cot_data = json.load(f)
 
@@ -138,7 +138,7 @@ class BaseDataset(Dataset):
         if mode == "SIMILAR":
             sorted_similar_image_list = list(sorted(self.similarity_data[item_id]["similarities"]["image"].keys(), key=lambda x: self.similarity_data[item_id]["similarities"]["image"][x], reverse=True))
             similar_image_list = []
-            if self.is_cot_active:
+            if self.is_few_cot_active:
                 for k in sorted_similar_image_list:
 
                     if self.cot_data[k]["scores"] == [1, 0]:
@@ -156,7 +156,7 @@ class BaseDataset(Dataset):
             for k in sorted_similar_text_list:
                 similar_example = self.json_data[k[0]]
 
-                if self.is_cot_active:
+                if self.is_few_cot_active:
                     similar_example["caption_cot_desc"] = self.cot_data[k[0]]["salt_caption_answer"]
                     similar_example["foil_cot_desc"] = self.cot_data[k[0]]["salt_foil_answer"]
                 
@@ -169,7 +169,7 @@ class BaseDataset(Dataset):
                     example = other_item
                 else:
                     continue
-                if self.is_cot_active:
+                if self.is_few_cot_active:
                     example["caption_cot_desc"] = self.cot_data[k[0]]["salt_caption_answer"]
                     example["foil_cot_desc"] = self.cot_data[k[0]]["salt_foil_answer"]
                 
@@ -195,7 +195,7 @@ class BaseDataset(Dataset):
         # Check if an example is valid based on mode and foil condition
         return (
             other_id != item_id and
-            (self.is_cot_active == False or self.cot_data[item_id]["scores"] == [1, 0]) and
+            (self.is_few_cot_active == False or self.cot_data[item_id]["scores"] == [1, 0]) and
             other_item['mturk']['caption'] > 1 and
             ((mode == 'RANDOM') or
             (mode == 'CLASS' and (
@@ -222,7 +222,8 @@ class Dataset_v1(Dataset):
             img_dir=None,
             mode='RANDOM',
             prompt_type='ITM',
-            is_cot_active=False,
+            is_zero_cot_active=False,
+            is_few_cot_active=False,
             cot_desc_data_path=None,
             tokenizer=None,
             **kwargs,
@@ -239,7 +240,8 @@ class Dataset_v1(Dataset):
         - img_dir (str): Directory containing images.
         - mode (str): Mode for selecting support examples ('RANDOM' or 'CLASS').
         - prompt_type (str): Type of prompt used.
-        - is_cot_active (bool): CoT analysis active or not.
+        - is_zero_cot_active (bool): Zero Shot CoT analysis active or not.
+        - is_few_cot_active (bool): CoT analysis active or not.        
         - cot_desc_data_path (str): Path to JSON file containing CoT description of image-text pairs.
         - tokenizer: Tokenizer for processing text.
         - **kwargs: Additional keyword arguments.
@@ -254,12 +256,17 @@ class Dataset_v1(Dataset):
                                     similarity_data_path=similarity_data_path, 
                                     top_k=top_k, 
                                     top_n=top_n,
-                                    is_cot_active=is_cot_active,
+                                    is_few_cot_active=is_few_cot_active,
                                     cot_desc_data_path=cot_desc_data_path)
         
-        self.is_cot_active = is_cot_active
-        if is_cot_active:
+        self.is_few_cot_active = is_few_cot_active
+        if is_few_cot_active:
           prompt_type = 'CoT_ITM'
+        
+        if is_zero_cot_active:
+          self.zero_cot_prompt = Prompt('Zero_CoT_ITM').prompt
+        else:
+          self.zero_cot_prompt = Prompt(prompt_type).prompt
           
         self.prompt = Prompt(prompt_type).prompt
         self.tokenizer = tokenizer
@@ -278,7 +285,7 @@ class Dataset_v1(Dataset):
         """
         image_file = item['image_file']
         image_path = osp.join(self.img_dir, image_file) if self.img_dir else None
-        image = Image.open(image_path) if self.img_dir else None
+        image = Image.open(image_path).convert('RGB') if self.img_dir else None
         return image, image_path
 
     def __len__(self):
@@ -295,7 +302,7 @@ class Dataset_v1(Dataset):
 
         cot_info = []
         for e in entry['support_classes_examples']:
-            if self.is_cot_active:
+            if self.is_few_cot_active:
                 cot_info.append(("Answer:" + e['caption_cot_desc'], "Answer:" + e['foil_cot_desc'], e['is_caption_example']))
             else:
                 cot_info.append(("Answer: Yes", "Answer: No", e['is_caption_example']))
@@ -311,8 +318,9 @@ class Dataset_v1(Dataset):
             'support_classes_image_list': support_img_list,
             'support_classes_raw_texts': support_raw_text_list,
             'support_classes_image_path_list': support_img_path_list,
-            'prompt': self.prompt,
-            'cot_info': cot_info
+            'support_prompt': self.prompt,
+            'cot_info': cot_info,
+            'query_prompt': self.zero_cot_prompt
         }
         return item
 

@@ -1,6 +1,5 @@
 from tqdm import tqdm
 from utils.util import write_results, check_answer
-from transformers import AutoProcessor, LlavaForConditionalGeneration
 from .models import model_registry
 
 import torch
@@ -12,6 +11,8 @@ class LLaVA_Llama3:
         self.tokenizer = None
         self.results= {}
         self.device = None
+        self.generation_cfg = {}
+        self.output_file = None
         
 
     def load_model(self, args) -> None:
@@ -25,7 +26,10 @@ class LLaVA_Llama3:
         None
         """
         
+        from transformers import AutoProcessor, LlavaForConditionalGeneration
+
         print('Loading LLaVA_Llama3!!!')
+
         self.device = args.device
         
         self.model = LlavaForConditionalGeneration.from_pretrained(
@@ -50,7 +54,7 @@ class LLaVA_Llama3:
             #'early_stopping': False,
             'use_cache': True
         }
-        self.scoring_type = args.scoring_type
+
         print('LLaVA_Llama3 loaded!!!')
 
     def calculate_generated_text(self, prompt, vision_x):
@@ -65,8 +69,8 @@ class LLaVA_Llama3:
         Tuple[str, str]: Tuple containing the result and generated text.
         """
         
-        if self.model is None:
-            raise AttributeError('Model is not initialized. Call load_model first!')
+        if self.model is None or self.processor is None:
+            raise AttributeError('Model or processor is not initialized. Call load_model first!')
 
         inputs = self.processor(prompt, vision_x, return_tensors='pt').to(self.device, torch.float16)
 
@@ -103,37 +107,32 @@ class LLaVA_Llama3:
         
         for item in tqdm(data):
 
-            caption_prompt = (f"<|start_header_id|>user<|end_header_id|>\n\n<image>\nAnalyze the image step by step using available information and determine if the sentence accurately describes it. Your final answer will be Final Answer: Yes/No. Sentence: {item['query_raw_texts'][0]}<|eot_id|>"
-          "<|start_header_id|>assistant<|end_header_id|>\n\n")
+            caption_prompt = f"<|start_header_id|>user<|end_header_id|>\n\n<image>\n{item['query_prompt']} Sentence: {item['query_raw_texts'][0]}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
           
-            foil_prompt = (f"<|start_header_id|>user<|end_header_id|>\n\n<image>\nAnalyze the image step by step using available information and determine if the sentence accurately describes it. Your final answer will be Final Answer: Yes/No. Sentence: {item['query_raw_texts'][1]}<|eot_id|>"
-          "<|start_header_id|>assistant<|end_header_id|>\n\n")
+            foil_prompt = f"<|start_header_id|>user<|end_header_id|>\n\n<image>\n{item['query_prompt']} Sentence: {item['query_raw_texts'][1]}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
 
             item_result = {}
 
-            if self.scoring_type == 'generated_text':
-                raw_caption_answer, salt_caption_answer, caption_prediction = self.calculate_generated_text(caption_prompt, item['query_image'])
-                raw_foil_answer, salt_foil_answer, foil_prediction = self.calculate_generated_text(foil_prompt, item['query_image'])
-                
-                caption_score = check_answer(caption_prediction, 0) 
-                foil_score = check_answer(foil_prediction, 1)
+            raw_caption_answer, salt_caption_answer, caption_prediction = self.calculate_generated_text(caption_prompt, item['query_image'])
+            raw_foil_answer, salt_foil_answer, foil_prediction = self.calculate_generated_text(foil_prompt, item['query_image'])
+            
+            caption_score = check_answer(caption_prediction, 0) 
+            foil_score = check_answer(foil_prediction, 1)
 
-                if caption_score == foil_score and caption_score == [1, 0]:
-                    score = [1, 0]
-                else:
-                    score = [0, 1]
-
-                item_result = {
-                    'scores': score,
-                    'caption_score': caption_score,
-                    'foil_score': foil_score,
-                    'salt_caption_answer': salt_caption_answer,
-                    'salt_foil_answer': salt_foil_answer,
-                    'raw_caption_answer': raw_caption_answer,
-                    'raw_foil_answer': raw_foil_answer
-                }
+            if caption_score == foil_score and caption_score == [1, 0]:
+                score = [1, 0]
             else:
-                raise NotImplementedError(f'{self.scoring_type} not implemented yet!')
+                score = [0, 1]
+
+            item_result = {
+                'scores': score,
+                'caption_score': caption_score,
+                'foil_score': foil_score,
+                'salt_caption_answer': salt_caption_answer,
+                'salt_foil_answer': salt_foil_answer,
+                'raw_caption_answer': raw_caption_answer,
+                'raw_foil_answer': raw_foil_answer
+            }
 
             item_id = item['item_id']
             self.results[item_id] = item_result

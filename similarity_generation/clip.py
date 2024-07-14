@@ -1,11 +1,10 @@
 import torch
-from transformers import AutoProcessor, CLIPModel, CLIPTokenizer, CLIPTextModel
 import torch.nn as nn
 from tqdm import tqdm
 from utils.util import write_results
 from .models import model_registry
 
-class ClipModel:
+class CLIP:
     def __init__(self):
         self.device = None
         self.processor = None
@@ -14,21 +13,45 @@ class ClipModel:
         self.text_encoder = None
         self.cos = nn.CosineSimilarity(dim=0)
         self.results = {}
+        self.output_file = None
 
     def load_model(self, args):
+        """
+        Load the CLIP model and processor.
+
+        Parameters:
+        - args: The args to load the model.
+
+        Returns:
+        None
+        """
+                
+        from transformers import AutoProcessor, CLIPModel, CLIPTokenizer, CLIPTextModel
+        
+        print('Loading CLIP!!!')
+
         self.device = args.device
+        self.output_file = args.output_file
         self.processor = AutoProcessor.from_pretrained(args.hf_path)
         self.model = CLIPModel.from_pretrained(args.hf_path).to(self.device)
         self.tokenizer = CLIPTokenizer.from_pretrained(args.hf_path)
         self.text_encoder = CLIPTextModel.from_pretrained(args.hf_path).to(self.device)
 
+        print('CLIP loaded!!!')
+
     def process_image_features(self, image):
+        if self.model is None or self.processor is None:
+            raise AttributeError('Model or processor is not initialized. Call load_model first!')
+        
         with torch.no_grad():
             inputs = self.processor(images=image, return_tensors='pt').to(self.device)
             image_features = self.model.get_image_features(**inputs)
         return image_features
 
     def process_text_features(self, text):
+        if self.text_encoder is None or self.processor is None:
+            raise AttributeError('Text encoder or processor is not initialized. Call load_model first!')
+        
         with torch.no_grad():
             inputs = self.tokenizer(
                     text, 
@@ -44,6 +67,16 @@ class ClipModel:
         return similarity
 
     def calculate_similarities(self, dataset):
+        """
+        Calculate image and text similarities using CLIP.
+
+        Parameters:
+        - dataset (List[Dict]): List of input data dictionaries.
+
+        Returns:
+        None
+        """
+
         total_similarities = {}
         
         for target_item in tqdm(dataset):
@@ -78,17 +111,17 @@ class ClipModel:
 
         self.results = total_similarities
       
-    def prepare_results(self, file_name):
+    def prepare_results(self):
         """
         Prepare and write the results to a JSON file.
 
         Parameters:
-        - file_name (str): Name of the output file.
+        - None
 
         Returns:
         None
         """
-        write_results(file_name, self.results)
+        write_results(self.output_file, self.results)
 
-clip_model_instance = ClipModel()
-model_registry.register_model("ClipModel", (clip_model_instance.load_model, clip_model_instance.calculate_similarities, clip_model_instance.prepare_results))
+clip_model_instance = CLIP()
+model_registry.register_model("clip", (clip_model_instance.load_model, clip_model_instance.calculate_similarities, clip_model_instance.prepare_results))

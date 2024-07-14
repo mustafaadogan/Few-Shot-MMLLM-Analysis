@@ -1,9 +1,8 @@
 import argparse
-from models.models import model_registry
 from utils.dataset import Dataset_v1
 from utils.eval import process_scores
 from utils.util import set_seed
-
+from test.models import model_registry
 
 def main():
     parser = argparse.ArgumentParser(description="Test script for various models")
@@ -24,7 +23,8 @@ def main():
     parser.add_argument("--tokenizer_path", type=str, help="tokenizer_path")
     parser.add_argument("--cross_attn_every_n_layers", type=int, help="cross_attn_every_n_layers", default=4)
     parser.add_argument("--hf_path", type=str, help="hf_path")
-    parser.add_argument("--is_cot_active", type=bool, help="is Chain of Thought active", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--is_zero_cot_active", type=bool, help="is Few-Shot Chain of Thought active", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--is_few_cot_active", type=bool, help="is Few-Shot Chain of Thought active", action=argparse.BooleanOptionalAction)
     parser.add_argument("--cot_desc_data_path", help="Path to JSON file containing CoT description of image-text pairs.")
     parser.add_argument("--sc_exp_cnt", type=int, help="Self-Consistency experiment count", default=1)
 
@@ -40,7 +40,8 @@ def main():
         img_dir=args.image_dir, 
         mode=args.sup_exp_mode, 
         prompt_type=args.prompt_type,
-        is_cot_active=args.is_cot_active,
+        is_zero_cot_active=args.is_zero_cot_active,
+        is_few_cot_active=args.is_few_cot_active,
         cot_desc_data_path=args.cot_desc_data_path
     )
 
@@ -49,7 +50,7 @@ def main():
         model_load_func(args)
         model_test_func(data)
         model_write_res_func()
-        scores = process_scores(args.output_file, args.scoring_type)
+        scores = process_scores(args.output_file)
         print(scores)
 
     else:

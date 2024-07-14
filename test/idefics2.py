@@ -3,9 +3,8 @@ from tqdm import tqdm
 from utils.util import write_results, check_answer, get_random_index_list
 
 import torch
-from transformers import IdeficsForVisionText2Text, AutoProcessor
 
-def prepare_prompt(user_prompt, support_data, query_data):
+def prepare_prompt(user_prompt, support_data, query_data, query_prompt):
     """
     Prepare prompts using user prompt, support example  data, and query example data.
 
@@ -15,62 +14,83 @@ def prepare_prompt(user_prompt, support_data, query_data):
     - query_data (dict): Dictionary containing query data.
 
     Returns:
-    tuple: Tuple containing prompt, and query caption order.
+    tuple: Tuple containing prompt, and ground truth value.
     """
     
     prompt = []
     for item in support_data:
-        img, caption, foil, cot_caption, cot_foil, is_caption_example = item['image'], item['caption'], item['foil'], item['cot_caption'], item['cot_foil'], item['is_caption_example']
+        caption, foil, cot_caption, cot_foil, is_caption_example = item['caption'], item['foil'], item['cot_caption'], item['cot_foil'], item['is_caption_example']
         
         if not is_caption_example:
             caption, foil = foil, caption
 
-        prompt += [
-            "User:",
-            img,
-            f"{user_prompt} {caption} \nAssistant: {cot_caption if is_caption_example else cot_foil}\n"
-        ]
+        user_message = {
+            "role": "user",
+            "content": [
+                {"type": "image"},
+                {"type": "text", "text": f"{user_prompt} {caption}"},
+            ]
+        }
+        
+        assistant_message = {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": f"{cot_caption if is_caption_example else cot_foil}"},
+            ]
+        }
+        
+        prompt.append(user_message)
+        prompt.append(assistant_message)
+        
 
-    query_img, query_caption_text, query_foil_text = query_data['image'], query_data['caption'], query_data['foil']
+    query_caption_text, query_foil_text = query_data['caption'], query_data['foil']
     
     if not query_data['is_caption_query']:
         query_caption_text, query_foil_text = query_foil_text, query_caption_text
 
-    prompt += [
-        "User:",
-        query_img,
-        f"{user_prompt} {query_caption_text} \nAssistant:" 
-    ]
+    query_message = {
+        "role": "user",
+        "content": [
+            {"type": "image"},
+            {"type": "text", "text": f"{query_prompt} {query_caption_text}"},
+        ]
+    }
+    
+    prompt.append(query_message)
 
     return prompt, query_data['is_caption_query']
 
-def prepare_answer(raw_generated_text, query_prompt):
+def prepare_answer(raw_generated_text):
     """
     Prepare answer using raw generated text and query prompt. 
 
     Parameters:
-    - raw_generated_text (str): Generated text by Idefics.
+    - raw_generated_text (str): Generated text by Idefics2.
     - query_prompt (str): Query to find the salt answer.
 
     Returns:
-    salt_result (str): Actual answer of Idefics.
+    salt_result (str): Actual answer of Idefics2.
     """
 
-    salt_result_index = raw_generated_text.find(query_prompt) + len(query_prompt)
-    salt_result = raw_generated_text[salt_result_index:]
+    salt_result = raw_generated_text.strip().split("Assistant")[-1].strip()
 
     return salt_result
 
 
-class Idefics:
+class Idefics2:
     def __init__(self):
         self.model = None
         self.processor = None
         self.results = {}
+        self.device = None
+        self.sc_exp_cnt = 1
+        self.generation_cfg = {}
+        self.output_file = None
+        self.scoring_type = None
 
     def load_model(self, args):
         """
-        Load the IDEFICS model and processor.
+        Load the IDEFICS2 model and processor.
 
         Parameters:
         - args: The args to load the model.
@@ -78,65 +98,87 @@ class Idefics:
         Returns:
         None
         """
-        print('Loading Idefics!!!')
+        
+        from transformers import AutoProcessor, AutoModelForVision2Seq, BitsAndBytesConfig
+        
+        print('Loading Idefics2!!!')
         checkpoint_path = args.hf_path
         self.device = args.device
         self.scoring_type = args.scoring_type
-        self.model = IdeficsForVisionText2Text.from_pretrained(checkpoint_path, torch_dtype=torch.float16).to(args.device)
-        self.processor = AutoProcessor.from_pretrained(checkpoint_path)
+        
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.float16
+        )
+        
+        self.model = AutoModelForVision2Seq.from_pretrained(
+            checkpoint_path,  
+            torch_dtype=torch.float16,
+            quantization_config=quantization_config,
+            _attn_implementation="flash_attention_2"  
+        )
+        
+        self.processor = AutoProcessor.from_pretrained(
+            checkpoint_path,
+            do_image_splitting=False,
+            size= {"longest_edge": 448, "shortest_edge": 378}
+        ) 
+        
         self.model.eval() 
         self.output_file = args.output_file
         self.sc_exp_cnt = args.sc_exp_cnt 
 
-        bad_words_ids = self.processor.tokenizer(["<image>", "<fake_token_around_image>"], add_special_tokens=False).input_ids
-
         self.generation_cfg = {
-            'bad_words_ids': bad_words_ids,
-            'do_sample': False,
-            'num_beams': 3
+            #'bad_words_ids': bad_words_ids,
+            #'do_sample': False,
+            #'num_beams': 3
         } 
 
-        self.is_cot_active = args.is_cot_active
-
-        if self.is_cot_active:
+        if args.is_zero_cot_active or args.is_few_cot_active:
           self.generation_cfg['max_new_tokens'] = 512
         else:
           self.generation_cfg['max_new_tokens'] = 5
 
-        print('Idefics loaded!!!')
+        print('Idefics2 loaded!!!')
 
-    def generate_text(self, prompt):
+    def calculate_generated_text(self, prompt, vision_x):
         """
-        Generate text based on the given prompts, support data, and query data.
+        Calculate generated text given a prompt and vision data.
 
         Parameters:
-        - prompt (str): Prompt for the assistant.
+        - prompt (str): The input prompt.
+        - vision_x (torch.Tensor): Tensor containing vision data.
 
         Returns:
-        raw_generated_text (str): Generated text data.
+        Tuple[str, str]: Tuple containing the raw and salt answer text.
         """
         
-        inputs = self.processor(prompt, return_tensors="pt").to(self.device)
+        if self.model is None or self.processor is None:
+            raise AttributeError('Model or processor is not initialized. Call load_model first!')
+                  
+        prompt = self.processor.apply_chat_template(prompt, add_generation_prompt=True)
+        inputs = self.processor(text=prompt, images=vision_x, return_tensors="pt")
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
         
+        
+        # Generate
         with torch.no_grad():
-            generated_ids = self.model.generate(
-                **inputs,  
-                bad_words_ids=self.generation_cfg['bad_words_ids'], 
-                do_sample=self.generation_cfg['do_sample'],
-                num_beams=self.generation_cfg['num_beams'],
-                max_new_tokens=self.generation_cfg['max_new_tokens'],
-            )
-            
-        raw_generated_text = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+            generated_ids = self.model.generate(**inputs, max_new_tokens=self.generation_cfg['max_new_tokens'])
         
-        return raw_generated_text
+        generated_texts = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        
+        
+        
+        return generated_texts
 
     def test(self, data):
         """
-        Test the IDEFICS model on the given data.
+        Test the IDEFICS2 model on the given data.
 
         Parameters:
-        - data (list): List of data items.
+        - data (List[Dict]): List of input data dictionaries.
 
         Returns:
         None
@@ -158,35 +200,32 @@ class Idefics:
 
                 support_data = [
                     {
-                        'image': img,
                         'caption': caption,
                         'foil': foil,
                         'cot_caption': cot_caption,
                         'cot_foil': cot_foil,
                         'is_caption_example': is_caption_example,
-                    } for img, (caption, foil), (cot_caption, cot_foil, is_caption_example) in zip(
-                        support_class_image_list,
+                    } for (caption, foil), (cot_caption, cot_foil, is_caption_example) in zip(
                         support_class_text_list,
                         cot_info_list
                     )
                 ]
                
                 query_data = {
-                    'image': item['query_image'],
                     'caption': item['query_raw_texts'][0],
                     'foil': item['query_raw_texts'][1],
                     'is_caption_query': item['query_raw_texts'][2]
                 }
                 
-
-                model_prompt, query_caption_order = prepare_prompt(item['prompt'], support_data, query_data)
+                model_prompt, query_caption_order = prepare_prompt(item['support_prompt'], support_data, query_data, item['query_prompt'])
+                img_list = support_class_image_list + [item['query_image']]
 
                 item_result = {}
                 score = [0, 1]
 
                 if self.scoring_type == "generated_text":
-                    model_generated_text = self.generate_text(model_prompt)
-                    model_salt_generated_text = prepare_answer(model_generated_text, model_prompt[-1])
+                    model_generated_text = self.calculate_generated_text(model_prompt, img_list)
+                    model_salt_generated_text = prepare_answer(model_generated_text)#, model_prompt[-1]["content"][1]["text"])
 
 
                     score = check_answer(model_salt_generated_text, query_caption_order) 
@@ -232,5 +271,5 @@ class Idefics:
         write_results(self.output_file, self.results)
 
 
-idefics_instance = Idefics()
-model_registry.register_model("idefics", (idefics_instance.load_model, idefics_instance.test, idefics_instance.prepare_results))
+idefics2_instance = Idefics2()
+model_registry.register_model("idefics2", (idefics2_instance.load_model, idefics2_instance.test, idefics2_instance.prepare_results))
