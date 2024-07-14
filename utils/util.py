@@ -64,8 +64,8 @@ def set_seed(seed):
     random.seed(SEED_NUMBER)
 
 def check_answer(answer, caption_order):
-    yes_terms = ['yes', 'Yes', 'true', 'True']
-    no_terms = ['no', 'No', 'false', 'False']
+    yes_terms = ['yes', 'Yes', 'YES', 'true', 'True', 'TRUE']
+    no_terms = ['no', 'No', 'NO', 'false', 'False', 'FALSE']
 
     contains_yes = any(term in answer for term in yes_terms)
     contains_no = any(term in answer for term in no_terms)
