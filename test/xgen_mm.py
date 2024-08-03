@@ -41,11 +41,9 @@ class XGenMM:
         self.tokenizer = self.model.update_special_tokens(self.tokenizer)
         self.tokenizer.padding_side = "left"
            
-        if args.support_example_count == 0:
-            self.placeholder_image_tokens = "<image placeholder>"
-        else:
-            num_tokens_per_vis = self.model.vlm.num_tokens_per_vis
-            self.placeholder_image_tokens = "<image placeholder>" * (num_tokens_per_vis - 1)
+        num_tokens_per_vis = self.model.vlm.num_tokens_per_vis
+        self.placeholder_image_tokens = "<image placeholder>" * (num_tokens_per_vis - 1)
+            
             
         self.model.to(self.device)
 
@@ -162,7 +160,7 @@ class XGenMM:
                         'scores': score,
                         'caption_order': is_caption_query,
                         'generated_text': answer,
-                        'prompt': prompt
+                        #'prompt': prompt
                     }
                                 
                 else:
