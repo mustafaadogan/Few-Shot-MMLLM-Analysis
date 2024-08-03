@@ -24,7 +24,7 @@ class Prompt:
             self.prompt = """Does the following sentence describe the image? Think step by step:"""
         
         elif prompt_type == 'Generate_CoT':
-            self.prompt = """Given an image and a corresponding sentence, analyze the image to determine if the sentence is true or false. Provide the answer in the format: Final Answer: Yes (if the sentence is true for the image) / No (if the sentence is false for the image)."""
+            self.prompt = """Please analyze the image provided and the corresponding sentence. Based on the content of the image, determine if the sentence is true or false. Provide your reasoning step by step, and then output your answer in the format: Final Answer: Yes (if the sentence is true for the image) / No (if the sentence is false for the image)."""
 
         else:
             raise NotImplementedError(f'{prompt_type} not implemented yet!')
