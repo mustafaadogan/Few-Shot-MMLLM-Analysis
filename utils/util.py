@@ -64,13 +64,19 @@ def set_seed(seed):
     random.seed(SEED_NUMBER)
 
 def check_answer(answer, caption_order):
-    if caption_order == True:
-      if 'yes' in answer or 'Yes' in answer or 'true' in answer or 'True' in answer:
-        return [1, 0]
-      else:
-        return [0, 1]
+    yes_terms = ['yes', 'Yes', 'YES', 'true', 'True', 'TRUE']
+    no_terms = ['no', 'No', 'NO', 'false', 'False', 'FALSE']
+
+    contains_yes = any(term in answer for term in yes_terms)
+    contains_no = any(term in answer for term in no_terms)
+
+    if caption_order:
+        if contains_yes and not contains_no:
+            return [1, 0]
+        else:
+            return [0, 1]
     else:
-      if 'no' in answer or 'No' in answer or 'false' in answer or 'False' in answer:
-        return [1, 0]
-      else:
-        return [0, 1]
+        if contains_no and not contains_yes:
+            return [1, 0]
+        else:
+            return [0, 1]
