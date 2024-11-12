@@ -1,4 +1,4 @@
-﻿# In-Context-Learning
+﻿# Few-Shot-MMLLM-Analysis
 ## Project Overview
 This project aims to assess the capabilities of Multimodal Large Language Models (MLLMs) using few-shot learning techniques. Specifically, we evaluate models pretrained on captioning and interleaved image and text datasets. Our goal is to understand how In-Context Learning (ICL) and Chain-of-Thought (CoT) prompting impact the performance of these models in tasks that require complex reasoning and contextual understanding.
 
